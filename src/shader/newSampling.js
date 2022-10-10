@@ -50,6 +50,11 @@ export const newSampling = /* glsl */`
 		return 0.5f * (rs * rs + rp * rp);
 	}
 
+	float Luminance(vec3 c)
+	{
+		return 0.212671 * c.x + 0.715160 * c.y + 0.072169 * c.z;
+	}
+
 
 	float DisneyFresnel(float metalness, float eta, float LDotH, float VDotH) {
 
@@ -72,8 +77,9 @@ export const newSampling = /* glsl */`
 		float lum = Luminance(surf.color);
 		vec3 ctint = lum > 0.0 ? surf.color / lum : vec3(1.0f);
 		float F0 = (1.0 - eta) / (1.0 + eta);
-		specCol = mix(F0 * F0 * mix(vec3(1.0), ctint, surf.specularTint), surf.color, surf.metalness);
-		sheenCol = mix(vec3(1.0), ctint, surf.sheenTint);
+		specCol = mix(F0 * F0 * mix(vec3(1.0), ctint, surf.specularColor), surf.color, surf.metalness);
+		sheenCol = mix(vec3(1.0), ctint, surf.sheenColor);
 	}
+
 
 `;
