@@ -1,6 +1,7 @@
 import { shaderGGXFunctions } from './shaderGGXFunctions.js';
 import { shaderSheenFunctions } from './shaderSheenFunctions.js';
 import { shaderIridescenceFunctions } from './shaderIridescenceFunctions.js';
+import { newSampling } from './newSampling.js';
 
 export const shaderMaterialSampling = /* glsl */`
 
@@ -39,6 +40,7 @@ struct SampleRec {
 ${ shaderGGXFunctions }
 ${ shaderSheenFunctions }
 ${ shaderIridescenceFunctions }
+${ newSampling }
 
 // diffuse
 float diffusePDF( vec3 wo, vec3 wi, SurfaceRec surf ) {
@@ -72,15 +74,38 @@ vec3 diffuseColor( vec3 wo, vec3 wi, SurfaceRec surf ) {
 // specular
 float specularPDF( vec3 wo, vec3 wi, SurfaceRec surf ) {
 
-	// See 14.1.1 Microfacet BxDFs in https://www.pbr-book.org/
-	float filteredRoughness = surf.filteredRoughness;
-	vec3 halfVector = getHalfVector( wi, wo );
+	vec3 L = wi;
+	vec3 V = wo;
+	vec3 H = getHalfVector( wo, wi );
+	float rough = surf.filteredRoughness;
+	float eta = surf.iorRatio;
+	vec3 specCol = surf.specularColor;
 
-	float incidentTheta = acos( wo.z );
-	float D = ggxDistribution( halfVector, filteredRoughness );
-	float G1 = ggxShadowMaskG1( incidentTheta, filteredRoughness );
-	float ggxPdf = D * G1 * max( 0.0, abs( dot( wo, halfVector ) ) ) / abs ( wo.z );
-	return ggxPdf / ( 4.0 * dot( wo, halfVector ) );
+
+    float pdf = 0.0;
+    if (L.z <= 0.0)
+        return 0.0;
+
+    float FM = DisneyFresnel(surf.metalness, eta, dot(L, H), dot(V, H));
+    vec3 F = mix(specCol, vec3(1.0), FM);
+    float D = GTR2Aniso(H.z, H.x, H.y, rough, rough);
+    float G1 = SmithGAniso(abs(V.z), V.x, V.y, rough, rough);
+    float G2 = G1 * SmithGAniso(abs(L.z), L.x, L.y, rough, rough);
+
+    pdf = G1 * D / (4.0 * V.z);
+	return pdf;
+
+
+
+	// // See 14.1.1 Microfacet BxDFs in https://www.pbr-book.org/
+	// float filteredRoughness = surf.filteredRoughness;
+	// vec3 halfVector = getHalfVector( wi, wo );
+
+	// float incidentTheta = acos( wo.z );
+	// float D = ggxDistribution( halfVector, filteredRoughness );
+	// float G1 = ggxShadowMaskG1( incidentTheta, filteredRoughness );
+	// float ggxPdf = D * G1 * max( 0.0, abs( dot( wo, halfVector ) ) ) / abs ( wo.z );
+	// return ggxPdf / ( 4.0 * dot( wo, halfVector ) );
 
 }
 
@@ -88,7 +113,7 @@ vec3 specularDirection( vec3 wo, SurfaceRec surf ) {
 
 	// sample ggx vndf distribution which gives a new normal
 	float filteredRoughness = surf.filteredRoughness;
-	vec3 halfVector = ggxDirection(
+	vec3 halfVector = SampleGGXVNDF(
 		wo,
 		filteredRoughness,
 		filteredRoughness,
@@ -103,39 +128,61 @@ vec3 specularDirection( vec3 wo, SurfaceRec surf ) {
 
 vec3 specularColor( vec3 wo, vec3 wi, SurfaceRec surf ) {
 
-	// if roughness is set to 0 then D === NaN which results in black pixels
-	float metalness = surf.metalness;
-	float filteredRoughness = surf.filteredRoughness;
+	vec3 L = wi;
+	vec3 V = wo;
+	vec3 H = getHalfVector( wo, wi );
+	float rough = surf.filteredRoughness;
+	float eta = surf.iorRatio;
+	vec3 specCol = surf.color;
 
-	vec3 halfVector = getHalfVector( wo, wi );
-	float iorRatio = surf.iorRatio;
-	float G = ggxShadowMaskG2( wi, wo, filteredRoughness );
-	float D = ggxDistribution( halfVector, filteredRoughness );
+    if (L.z <= 0.0)
+        return vec3(0.0);
 
-	float f0 = iorRatioToF0( iorRatio );
-	vec3 F = vec3( schlickFresnel( dot( wi, halfVector ), f0 ) );
+    float FM = DisneyFresnel(surf.metalness, eta, dot(L, H), dot(V, H));
+    vec3 F = mix(specCol, vec3(1.0), FM);
+    float D = GTR2Aniso(H.z, H.x, H.y, rough, rough);
+    float G1 = SmithGAniso(abs(V.z), V.x, V.y, rough, rough);
+    float G2 = G1 * SmithGAniso(abs(L.z), L.x, L.y, rough, rough);
 
-	float cosTheta = min( wo.z, 1.0 );
-	float sinTheta = sqrt( 1.0 - cosTheta * cosTheta );
-	bool cannotRefract = iorRatio * sinTheta > 1.0;
-	if ( cannotRefract ) {
+    return 0.33 * F * D * G2 / (4.0 * L.z * V.z);
 
-		F = vec3( 1.0 );
 
-	}
 
-	vec3 iridescenceFresnel = evalIridescence( 1.0, surf.iridescenceIor, dot( wi, halfVector ), surf.iridescenceThickness, vec3( f0 ) );
-	vec3 metalF = mix( F, iridescenceFresnel, surf.iridescence );
-	vec3 dialectricF = F * surf.specularIntensity;
-	F = mix( dialectricF, metalF, metalness );
 
-	vec3 color = mix( surf.specularColor, surf.color, metalness );
-	color = mix( color, vec3( 1.0 ), F );
-	color *= G * D / ( 4.0 * abs( wi.z * wo.z ) );
-	color *= mix( F, vec3( 1.0 ), metalness );
-	color *= wi.z; // scale the light by the direction the light is coming in from
 
-	return color;
+	// // if roughness is set to 0 then D === NaN which results in black pixels
+	// float metalness = surf.metalness;
+	// float filteredRoughness = surf.filteredRoughness;
+
+	// vec3 halfVector = getHalfVector( wo, wi );
+	// float iorRatio = surf.iorRatio;
+	// float G = ggxShadowMaskG2( wi, wo, filteredRoughness );
+	// float D = ggxDistribution( halfVector, filteredRoughness );
+
+	// float f0 = iorRatioToF0( iorRatio );
+	// vec3 F = vec3( schlickFresnel( dot( wi, halfVector ), f0 ) );
+
+	// float cosTheta = min( wo.z, 1.0 );
+	// float sinTheta = sqrt( 1.0 - cosTheta * cosTheta );
+	// bool cannotRefract = iorRatio * sinTheta > 1.0;
+	// if ( cannotRefract ) {
+
+	// 	F = vec3( 1.0 );
+
+	// }
+
+	// vec3 iridescenceFresnel = evalIridescence( 1.0, surf.iridescenceIor, dot( wi, halfVector ), surf.iridescenceThickness, vec3( f0 ) );
+	// vec3 metalF = mix( F, iridescenceFresnel, surf.iridescence );
+	// vec3 dialectricF = F * surf.specularIntensity;
+	// F = mix( dialectricF, metalF, metalness );
+
+	// vec3 color = mix( surf.specularColor, surf.color, metalness );
+	// color = mix( color, vec3( 1.0 ), F );
+	// color *= G * D / ( 4.0 * abs( wi.z * wo.z ) );
+	// color *= mix( F, vec3( 1.0 ), metalness );
+	// color *= wi.z; // scale the light by the direction the light is coming in from
+
+	// return color;
 
 }
 
