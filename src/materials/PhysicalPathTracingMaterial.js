@@ -483,7 +483,7 @@ export class PhysicalPathTracingMaterial extends MaterialBase {
 
 						if ( ! hit ) {
 
-							if ( i == 0 || transmissiveRay ) {
+							if ( i == 0 || transmissiveRay || i == 1 && ! isShadowRay ) {
 
 								gl_FragColor.rgb += sampleBackground( environmentRotation * rayDirection ) * throughputColor;
 								gl_FragColor.a = backgroundAlpha;
